@@ -47,7 +47,7 @@ Arduino_ESP32RGBPanel *bus = new Arduino_ESP32RGBPanel(
   1 /* pclk_active_neg */, 16000000 /* prefer_speed */
 );
 
-Arduino_RPi_DPI_RGBPanel *gfx = new Arduino_RPi_DPI_RGBPanel(
+Arduino_RGB_Display *gfx = new Arduino_RGB_Display(
   DISPLAY_WIDTH, DISPLAY_HEIGHT, bus, 0, true,
   NULL, TFT_BL  // backlight on GPIO 2
 );
