@@ -100,6 +100,6 @@
 // This avoids excessive PSRAM usage while keeping rendering smooth
 // Buffer rows for LVGL partial rendering
 // Higher = smoother but more RAM. 40 works without PSRAM, 80 is smoother
-#define LVGL_BUF_ROWS   80
+#define LVGL_BUF_ROWS   55
 
 #endif // CONFIG_H
