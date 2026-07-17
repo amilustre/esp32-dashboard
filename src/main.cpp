@@ -3,7 +3,7 @@
  *
  * Sunton ESP32-8048S070
  * 7" 800x480 RGB TFT + GT911 capacitive touch
- * ESP32-S3 with 8MB PSRAM
+ * ESP32-S3 with NO PSRAM
  *
  * Features:
  *   - WiFi connectivity with auto-reconnect
@@ -14,7 +14,8 @@
  *       Page 3: Volume Controls (up/down/mute)
  *   - Touch-interactive workspace switching and volume control
  *
- * Tech stack: Arduino Framework + LVGL 9 + LovyanGFX + GT911
+ * Tech stack: Arduino Framework + LVGL 9 + Arduino_GFX + GT911
+ * Display driver: Arduino_ESP32RGBPanel + Arduino_RGB_Display (no PSRAM needed)
  */
 
 #include <Arduino.h>
@@ -24,7 +25,8 @@
 #include <esp_heap_caps.h>   // for heap_caps_malloc with MALLOC_CAP_DMA
 
 #include <lvgl.h>
-#include "LGFX_Sunton_ESP32_8048S070.hpp"
+#include <Arduino_GFX_Library.h>
+#include <Wire.h>
 
 #include "config.h"
 
@@ -32,8 +34,23 @@
 // Global State
 // ============================================================================
 
-// --- Display & Touch (LovyanGFX) ---
-static LGFX lcd;
+// --- Display (Arduino_GFX, no PSRAM) ---
+// RGB parallel bus with timings from ConnalM / EK9716 datasheet
+// 16-bit RGB565: 5 red + 6 green + 5 blue
+Arduino_ESP32RGBPanel *bus = new Arduino_ESP32RGBPanel(
+  TFT_DE, TFT_VSYNC, TFT_HSYNC, TFT_PCLK,
+  TFT_R0, TFT_R1, TFT_R2, TFT_R3, TFT_R4,
+  TFT_G0, TFT_G1, TFT_G2, TFT_G3, TFT_G4, TFT_G5,
+  TFT_B0, TFT_B1, TFT_B2, TFT_B3, TFT_B4,
+  0 /* hsync_polarity */, 210 /* hsync_front_porch */, 30 /* hsync_pulse_width */, 16 /* hsync_back_porch */,
+  0 /* vsync_polarity */, 22 /* vsync_front_porch */, 13 /* vsync_pulse_width */, 10 /* vsync_back_porch */,
+  1 /* pclk_active_neg */, 16000000 /* prefer_speed */
+);
+
+Arduino_RGB_Display *gfx = new Arduino_RGB_Display(
+  DISPLAY_WIDTH, DISPLAY_HEIGHT, bus, 0, true,
+  NULL, TFT_BL  // backlight on GPIO 2
+);
 
 // --- LVGL ---
 static lv_display_t  *lvgl_disp      = nullptr;
@@ -82,18 +99,116 @@ static void volume_toggle_mute();
 // ============================================================================
 
 static void init_display() {
-    Serial.println("[DISPLAY] Initializing with LovyanGFX...");
+    Serial.println("[DISPLAY] Initializing with Arduino_GFX...");
 
-    lcd.init();
-    lcd.setBrightness(200);  // ~78% brightness
-    lcd.fillScreen(TFT_BLACK);
+    // Initialize the display
+    gfx->begin();
+    
+    // Turn on backlight via Arduino_RGB_Display (already set up with TFT_BL pin)
+    // The constructor's last arg sets the backlight pin; begin() should handle it.
+    // Ensure it's on:
+    pinMode(TFT_BL, OUTPUT);
+    digitalWrite(TFT_BL, HIGH);
 
-    Serial.println("[DISPLAY] Display initialized OK");
-    Serial.println("[DISPLAY] No PSRAM — using LVGL partial rendering with DMA SRAM buffer");
+    gfx->fillScreen(BLACK);
+
+    Serial.println("[DISPLAY] Display initialized OK (Arduino_GFX, no PSRAM needed)");
 }
 
-// No separate init_touch() needed - LovyanGFX handles GT911 internally
-// via the LGFX board configuration class.
+// GT911 Touch via I2C (Arduino_GFX doesn't have built-in GT911 support)
+// The GT911 is on I2C_NUM_1 at address 0x14
+#define GT911_ADDR  0x14
+#define GT911_I2C   Wire1
+
+// GT911 register addresses
+#define GT911_READ_XY_REG  0x814E
+
+static bool gt911_read(uint16_t reg, uint8_t *data, size_t len) {
+    GT911_I2C.beginTransmission(GT911_ADDR);
+    GT911_I2C.write(reg >> 8);   // high byte first
+    GT911_I2C.write(reg & 0xFF); // low byte
+    if (GT911_I2C.endTransmission(false) != 0) {
+        return false;
+    }
+    if (GT911_I2C.requestFrom(GT911_ADDR, (int)len) != (int)len) {
+        return false;
+    }
+    for (size_t i = 0; i < len; i++) {
+        data[i] = GT911_I2C.read();
+    }
+    return true;
+}
+
+static bool gt911_write(uint16_t reg, uint8_t value) {
+    GT911_I2C.beginTransmission(GT911_ADDR);
+    GT911_I2C.write(reg >> 8);
+    GT911_I2C.write(reg & 0xFF);
+    GT911_I2C.write(value);
+    return GT911_I2C.endTransmission(true) == 0;
+}
+
+// Initialize the GT911 touch controller
+static void init_touch() {
+    Serial.println("[TOUCH] Initializing GT911 via I2C...");
+
+    // Reset the touch controller
+    if (TOUCH_RST >= 0) {
+        pinMode(TOUCH_RST, OUTPUT);
+        digitalWrite(TOUCH_RST, LOW);
+        delay(10);
+        digitalWrite(TOUCH_RST, HIGH);
+        delay(50);
+    }
+
+    GT911_I2C.begin(TOUCH_SCL, TOUCH_SDA, 400000);
+    
+    // Verify the GT911 is alive by reading its config version register
+    uint8_t cfg_data[2] = {0};
+    if (gt911_read(0x8047, cfg_data, 2)) {
+        Serial.printf("[TOUCH] GT911 detected, config version: 0x%02X%02X\n",
+                      cfg_data[0], cfg_data[1]);
+    } else {
+        Serial.println("[TOUCH] WARNING: GT911 not detected on I2C! Touch may not work.");
+    }
+
+    Serial.println("[TOUCH] GT911 initialized OK");
+}
+
+// Read a single touch point from GT911
+// Returns true if touched, false if no touch
+static bool get_touch(int16_t *tx, int16_t *ty) {
+    uint8_t status = 0;
+    if (!gt911_read(GT911_READ_XY_REG, &status, 1)) {
+        return false;
+    }
+
+    // Check if data is ready (bit 0)
+    if (!(status & 0x80)) {
+        return false;
+    }
+
+    uint8_t touch_count = status & 0x0F;
+    if (touch_count == 0) {
+        // Clear the ready flag
+        gt911_write(GT911_READ_XY_REG, 0);
+        return false;
+    }
+
+    // Read first touch point (7 bytes starting at 0x814F)
+    uint8_t point_data[7];
+    if (!gt911_read(GT911_READ_XY_REG + 1, point_data, 7)) {
+        return false;
+    }
+
+    // Parse coordinates (little-endian)
+    *tx = (int16_t)(point_data[1] | (point_data[2] << 8));
+    *ty = (int16_t)(point_data[3] | (point_data[4] << 8));
+
+    // Clear the ready flag so next interrupt can trigger
+    gt911_write(GT911_READ_XY_REG, 0);
+
+    return true;
+}
 
 // ============================================================================
 // WiFi Management
@@ -249,15 +364,8 @@ static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
     uint32_t w = lv_area_get_width(area);
     uint32_t h = lv_area_get_height(area);
 
-    // Use blocking pushImage instead of pushImageDMA to avoid a race condition:
-    // pushImageDMA is asynchronous, and calling lv_disp_flush_ready immediately
-    // tells LVGL to reuse the buffer while DMA is still reading from it.
-    // This causes display corruption / blank screen.
-    // Once the display works reliably, DMA can be re-enabled with proper waits.
-    lcd.pushImage(area->x1, area->y1, w, h, (uint16_t *)px_map);
-    // For DMA version (faster but needs DMA wait):
-    // lcd.pushImageDMA(area->x1, area->y1, w, h, (uint16_t *)px_map);
-    // while (lcd.dmaBusy()) {}   // or lcd.waitDma();
+    // Use Arduino_GFX draw16bitRGBBitmap to write the LVGL frame buffer region
+    gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)px_map, w, h);
 
     lv_disp_flush_ready(disp);
 
@@ -272,7 +380,7 @@ static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
 static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
     int16_t tx = -1, ty = -1;
 
-    if (lcd.getTouch(&tx, &ty)) {
+    if (get_touch(&tx, &ty)) {
         data->state = LV_INDEV_STATE_PRESSED;
         data->point.x = tx;
         data->point.y = ty;
@@ -889,8 +997,11 @@ void setup() {
     Serial.printf("[CHIP] Free DMA RAM: %u bytes\n",
                   heap_caps_get_free_size(MALLOC_CAP_DMA));
 
-    // 1. Initialize display (and touch via LovyanGFX)
+    // 1. Initialize display (Arduino_GFX)
     init_display();
+
+    // 1b. Initialize GT911 touch controller (I2C)
+    init_touch();
 
     // 2. Initialize LVGL
     init_lvgl();
@@ -927,8 +1038,9 @@ void loop() {
     // Print a heartbeat every 5 seconds to confirm loop() is running
     if (now - last_loop_print > 5000) {
         last_loop_print = now;
-        Serial.printf("[LOOP] Alive at %lu ms, free heap=%d, free PSRAM=%d\n",
-                      now, ESP.getFreeHeap(), ESP.getFreePsram());
+        Serial.printf("[LOOP] Alive at %lu ms, free heap=%d, free DMA=%d\n",
+                      now, ESP.getFreeHeap(),
+                      heap_caps_get_free_size(MALLOC_CAP_DMA));
     }
 
     // Small delay to prevent watchdog timeout on ESP32-S3

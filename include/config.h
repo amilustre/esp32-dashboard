@@ -3,7 +3,7 @@
  *
  * Sunton ESP32-8048S070
  * 7" 800x480 RGB TFT + GT911 capacitive touch
- * ESP32-S3 with 8MB PSRAM
+ * ESP32-S3 with NO PSRAM
  *
  * Edit these values to match your network and API server.
  */
@@ -101,6 +101,6 @@
 // 800 x 160 x 2 = 256KB, allocated from DMA-capable SRAM (~384KB available).
 // Single buffer + 160 rows = only 3 flushes per frame instead of 12.
 // This is MUCH smoother than 40 rows with double buffer (192KB).
-#define LVGL_BUF_ROWS   40
+#define LVGL_BUF_ROWS   160
 
 #endif // CONFIG_H
