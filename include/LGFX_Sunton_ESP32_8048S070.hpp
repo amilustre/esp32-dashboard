@@ -91,12 +91,9 @@ public:
       cfg.pin_hsync   = GPIO_NUM_39;   // HSYNC
       cfg.pin_pclk    = GPIO_NUM_42;   // PCLK
 
-      // Clock frequency: 14 MHz (matches official LovyanGFX board header)
-      // 12 MHz can cause blank screen on some panel variants; 16 MHz causes WiFi flicker
-      cfg.freq_write = 14000000;
+      cfg.freq_write = 16000000;
 
-      // Display timing from Sunton vendor demo code (Arduino_GFX) and Tasmota autoconf
-      // EK9716 driver IC requires these specific values to lock to the RGB signal
+      // Display timing from ConnalM/Arduino_GFX vendor demo (confirmed working)
       cfg.hsync_polarity       = 0;
       cfg.hsync_front_porch    = 210;
       cfg.hsync_pulse_width    = 30;
@@ -105,7 +102,8 @@ public:
       cfg.vsync_front_porch    = 22;
       cfg.vsync_pulse_width    = 13;
       cfg.vsync_back_porch     = 10;
-      cfg.pclk_idle_high       = 1;
+      cfg.pclk_active_neg       = 1;
+      cfg.pclk_idle_high       = 0;
 
       _bus_instance.config(cfg);
     }
