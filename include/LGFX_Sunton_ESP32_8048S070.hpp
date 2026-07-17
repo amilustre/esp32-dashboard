@@ -11,7 +11,9 @@
  * Based on the official LovyanGFX board header from:
  * https://github.com/lovyan03/LovyanGFX/blob/master/src/lgfx_user/LGFX_Sunton_ESP32-8048S070.h
  *
- * Uses 12 MHz PCLK to avoid WiFi-related display flickering (ref: LovyanGFX issue #760).
+ * Uses 14 MHz PCLK with corrected display timing from Sunton vendor demo.
+ * Timing values: hsync_front_porch=210, hsync_pulse_width=30, hsync_back_porch=16,
+ * vsync_front_porch=22, vsync_pulse_width=13, vsync_back_porch=10.
  */
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
@@ -89,19 +91,20 @@ public:
       cfg.pin_hsync   = GPIO_NUM_39;   // HSYNC
       cfg.pin_pclk    = GPIO_NUM_42;   // PCLK
 
-      // Clock frequency: 12 MHz for stable operation with WiFi
-      // (14 MHz may cause tearing with newer espressif frameworks)
-      cfg.freq_write = 12000000;
+      // Clock frequency: 14 MHz (matches official LovyanGFX board header)
+      // 12 MHz can cause blank screen on some panel variants; 16 MHz causes WiFi flicker
+      cfg.freq_write = 14000000;
 
-      // Display timing (from official LovyanGFX board header)
+      // Display timing from Sunton vendor demo code (Arduino_GFX) and Tasmota autoconf
+      // EK9716 driver IC requires these specific values to lock to the RGB signal
       cfg.hsync_polarity       = 0;
-      cfg.hsync_front_porch    = 80;
-      cfg.hsync_pulse_width    = 4;
+      cfg.hsync_front_porch    = 210;
+      cfg.hsync_pulse_width    = 30;
       cfg.hsync_back_porch     = 16;
       cfg.vsync_polarity       = 0;
       cfg.vsync_front_porch    = 22;
-      cfg.vsync_pulse_width    = 4;
-      cfg.vsync_back_porch     = 4;
+      cfg.vsync_pulse_width    = 13;
+      cfg.vsync_back_porch     = 10;
       cfg.pclk_idle_high       = 1;
 
       _bus_instance.config(cfg);
