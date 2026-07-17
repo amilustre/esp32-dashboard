@@ -299,7 +299,7 @@ static lv_obj_t* build_page_workspaces(lv_obj_t *parent) {
 
         // Tap handler to switch workspace
         lv_obj_add_event_cb(btn, [](lv_event_t *e) {
-            void *user_data = lv_obj_get_user_data(lv_event_get_target(e));
+            void *user_data = lv_obj_get_user_data((lv_obj_t*)lv_event_get_target(e));
             int ws_id = (int)(intptr_t)user_data;
             switch_workspace(ws_id);
         }, LV_EVENT_CLICKED, nullptr);
