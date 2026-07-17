@@ -14,7 +14,7 @@
  *       Page 3: Volume Controls (up/down/mute)
  *   - Touch-interactive workspace switching and volume control
  *
- * Tech stack: Arduino Framework + LVGL 9 + Arduino_GFX + GT911
+ * Tech stack: Arduino Framework + LVGL 9 + LovyanGFX + GT911
  */
 
 #include <Arduino.h>
@@ -23,8 +23,7 @@
 #include <ArduinoJson.h>
 
 #include <lvgl.h>
-#include <Arduino_GFX_Library.h>
-#include <TAMC_GT911.h>
+#include "LGFX_Sunton_ESP32_8048S070.hpp"
 
 #include "config.h"
 
@@ -32,12 +31,8 @@
 // Global State
 // ============================================================================
 
-// --- Display ---
-Arduino_ESP32RGBPanel *rgbPanel = nullptr;
-Arduino_RGB_Display   *gfx      = nullptr;
-
-// --- Touch ---
-TAMC_GT911 *touch = nullptr;
+// --- Display & Touch (LovyanGFX) ---
+static LGFX lcd;
 
 // --- LVGL ---
 static lv_display_t  *lvgl_disp      = nullptr;
@@ -86,56 +81,20 @@ static void volume_toggle_mute();
 // ============================================================================
 
 static void init_display() {
-    Serial.println("[DISPLAY] Initializing RGB panel...");
+    Serial.println("[DISPLAY] Initializing with LovyanGFX...");
 
-    // Create the RGB parallel bus with correct pin mapping for ESP32-8048S070
-    rgbPanel = new Arduino_ESP32RGBPanel(
-        TFT_DE, TFT_VSYNC, TFT_HSYNC, TFT_PCLK,
-        TFT_R0, TFT_R1, TFT_R2, TFT_R3, TFT_R4,
-        TFT_G0, TFT_G1, TFT_G2, TFT_G3, TFT_G4, TFT_G5,
-        TFT_B0, TFT_B1, TFT_B2, TFT_B3, TFT_B4,
-        0,  // hsync_polarity
-        20, // hsync_front_porch
-        30, // hsync_pulse_width
-        16, // hsync_back_porch
-        0,  // vsync_polarity
-        22, // vsync_front_porch
-        13, // vsync_pulse_width
-        10, // vsync_back_porch
-        true // pclk_active_neg
-    );
-
-    gfx = new Arduino_RGB_Display(DISPLAY_WIDTH, DISPLAY_HEIGHT, rgbPanel, 0, true);
-
-    if (!gfx->begin()) {
-        Serial.println("[DISPLAY] FAILED to initialize display!");
-        while (1) delay(100);
+    lcd.init();
+    if (!lcd.isPCLKEnabled()) {
+        Serial.println("[DISPLAY] WARNING: PCLK may not be running");
     }
+    lcd.setBrightness(200);  // ~78% brightness
+    lcd.fillScreen(TFT_BLACK);
+
     Serial.println("[DISPLAY] Display initialized OK");
-
-    // Turn on backlight via PWM
-#ifdef TFT_BL
-    ledcAttach(TFT_BL, 5000, 8);  // 5kHz, 8-bit resolution
-    ledcWrite(TFT_BL, 200);       // ~78% brightness
-#endif
-
-    gfx->fillScreen(BLACK);
-    Serial.println("[DISPLAY] Backlight on, screen cleared");
 }
 
-static void init_touch() {
-    Serial.println("[TOUCH] Initializing GT911...");
-
-    touch = new TAMC_GT911(TOUCH_SDA, TOUCH_SCL, TOUCH_INT, TOUCH_RST,
-                           DISPLAY_WIDTH, DISPLAY_HEIGHT);
-
-    if (!touch->begin()) {
-        Serial.println("[TOUCH] WARNING: GT911 init failed (may work after reset)");
-    } else {
-        touch->setRotation(1);  // Match display orientation
-        Serial.println("[TOUCH] GT911 initialized OK");
-    }
-}
+// No separate init_touch() needed - LovyanGFX handles GT911 internally
+// via the LGFX board configuration class.
 
 // ============================================================================
 // WiFi Management
@@ -260,32 +219,17 @@ static bool http_post(const char *path, JsonDocument *body = nullptr) {
 static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
     uint32_t w = lv_area_get_width(area);
     uint32_t h = lv_area_get_height(area);
-    gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)px_map, w, h);
+    lcd.pushImageDMA(area->x1, area->y1, w, h, (uint16_t *)px_map);
     lv_disp_flush_ready(disp);
 }
 
 static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
-    static int last_x = 0, last_y = 0;
+    int16_t tx = -1, ty = -1;
 
-    touch->read();
-
-    if (touch->isTouched) {
-        // Use only the first touch point
-        int x = touch->points[0].x;
-        int y = touch->points[0].y;
-
-        // Simple debounce: accept if within reasonable range of last position
-        // or if it's a new press (significant movement = new touch)
-        if (abs(x - last_x) < 5 && abs(y - last_y) < 5) {
-            // Same position, likely held touch - use last valid coords
-        } else {
-            last_x = x;
-            last_y = y;
-        }
-
+    if (lcd.getTouch(&tx, &ty)) {
         data->state = LV_INDEV_STATE_PRESSED;
-        data->point.x = x;
-        data->point.y = y;
+        data->point.x = tx;
+        data->point.y = ty;
     } else {
         data->state = LV_INDEV_STATE_RELEASED;
     }
@@ -860,22 +804,19 @@ void setup() {
     Serial.println("Sunton ESP32-8048S070 (800x480)");
     Serial.println("========================================");
 
-    // 1. Initialize display
+    // 1. Initialize display (and touch via LovyanGFX)
     init_display();
 
-    // 2. Initialize touch
-    init_touch();
-
-    // 3. Initialize LVGL
+    // 2. Initialize LVGL
     init_lvgl();
 
-    // 4. Build the UI
+    // 3. Build the UI
     build_ui();
 
-    // 5. Connect to WiFi
+    // 4. Connect to WiFi
     wifi_connect();
 
-    // 6. Initial data fetch
+    // 5. Initial data fetch
     api_poll_all();
 
     Serial.println("[SETUP] Complete!");
