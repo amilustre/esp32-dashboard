@@ -21,6 +21,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <esp_heap_caps.h>   // for heap_caps_malloc with MALLOC_CAP_DMA
 
 #include <lvgl.h>
 #include "LGFX_Sunton_ESP32_8048S070.hpp"
@@ -87,7 +88,15 @@ static void init_display() {
     lcd.setBrightness(200);  // ~78% brightness
     lcd.fillScreen(TFT_BLACK);
 
-    Serial.println("[DISPLAY] Display initialized OK");
+    Serial.println("[DISPLAY] Display initialized OK (white flash seen = hardware works)");
+
+    // Check PSRAM availability
+    if (psramFound()) {
+        Serial.printf("[DISPLAY] PSRAM found: %d bytes total, %d bytes free\n",
+                      ESP.getPsramSize(), ESP.getFreePsram());
+    } else {
+        Serial.println("[DISPLAY] WARNING: No PSRAM found! Performance will suffer.");
+    }
 }
 
 // No separate init_touch() needed - LovyanGFX handles GT911 internally
@@ -216,8 +225,25 @@ static bool http_post(const char *path, JsonDocument *body = nullptr) {
 static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
     uint32_t w = lv_area_get_width(area);
     uint32_t h = lv_area_get_height(area);
-    lcd.pushImageDMA(area->x1, area->y1, w, h, (uint16_t *)px_map);
+
+    // Use blocking pushImage instead of pushImageDMA to avoid a race condition:
+    // pushImageDMA is asynchronous, and calling lv_disp_flush_ready immediately
+    // tells LVGL to reuse the buffer while DMA is still reading from it.
+    // This causes display corruption / blank screen.
+    // Once the display works reliably, DMA can be re-enabled with proper waits.
+    lcd.pushImage(area->x1, area->y1, w, h, (uint16_t *)px_map);
+    // For DMA version (faster but needs DMA wait):
+    // lcd.pushImageDMA(area->x1, area->y1, w, h, (uint16_t *)px_map);
+    // while (lcd.dmaBusy()) {}   // or lcd.waitDma();
+
     lv_disp_flush_ready(disp);
+
+    // Debug: print first few flushes to verify pipeline
+    static int flush_count = 0;
+    if (flush_count < 5) {
+        Serial.printf("[LVGL] Flush #%d: area=(%d,%d)-(%d,%d) size=%dx%d\n",
+                      ++flush_count, area->x1, area->y1, area->x2, area->y2, w, h);
+    }
 }
 
 static void lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
@@ -595,29 +621,49 @@ void switch_page(int page, bool animated) {
 static void init_lvgl() {
     Serial.println("[LVGL] Initializing...");
     lv_init();
+
+    // NOTE: LV_TICK_CUSTOM is defined in lv_conf.h (compile-time tick from millis()).
+    // The runtime call lv_tick_set_cb() is redundant when LV_TICK_CUSTOM is active.
+    // We keep it as a fallback in case LV_TICK_CUSTOM is ever disabled.
     lv_tick_set_cb(lvgl_tick_cb);
 
     // Allocate draw buffer from PSRAM if available, otherwise from normal RAM
-    size_t buf_size = DISPLAY_WIDTH * LVGL_BUF_ROWS * sizeof(lv_color_t);
-    Serial.printf("[LVGL] Allocating draw buffer: %zu bytes (%d x %d rows x 2)\n",
-                  buf_size * 2, DISPLAY_WIDTH, LVGL_BUF_ROWS);
+    // LVGL 9.x lv_display_set_buffers() expects the size in PIXELS, not bytes!
+    size_t buf_size_px = DISPLAY_WIDTH * LVGL_BUF_ROWS;        // pixels per buffer
+    size_t buf_size_bytes = buf_size_px * sizeof(lv_color_t);   // actual bytes needed
 
-    lvgl_draw_buf = (lv_color_t *)ps_malloc(buf_size * 2);
+    Serial.printf("[LVGL] Buffer: %d x %d rows = %d pixels, %zu bytes per buffer\n",
+                  DISPLAY_WIDTH, LVGL_BUF_ROWS, buf_size_px, buf_size_bytes);
+    Serial.printf("[LVGL] 2 buffers total: %zu bytes\n", buf_size_bytes * 2);
+
+    // Allocate two display buffers as one contiguous block for double buffering
+    lvgl_draw_buf = (lv_color_t *)ps_malloc(buf_size_bytes * 2);
     if (!lvgl_draw_buf) {
-        // Fall back to normal malloc if PSRAM allocation fails
         Serial.println("[LVGL] WARNING: PSRAM allocation failed, trying normal RAM");
-        lvgl_draw_buf = (lv_color_t *)malloc(buf_size * 2);
+        lvgl_draw_buf = (lv_color_t *)heap_caps_malloc(buf_size_bytes * 2, MALLOC_CAP_DMA);
+        if (!lvgl_draw_buf) {
+            lvgl_draw_buf = (lv_color_t *)malloc(buf_size_bytes * 2);
+        }
     }
 
     if (!lvgl_draw_buf) {
-        Serial.println("[LVGL] FATAL: Cannot allocate draw buffer!");
-        while (1) delay(100);
+        Serial.println("[LVGL] FATAL: Cannot allocate draw buffer! HALTING.");
+        while (1) { delay(100); }
     }
+    Serial.printf("[LVGL] Draw buffer allocated at 0x%08x\n", (uintptr_t)lvgl_draw_buf);
 
     lvgl_disp = lv_display_create(DISPLAY_WIDTH, DISPLAY_HEIGHT);
     lv_display_set_flush_cb(lvgl_disp, lvgl_flush_cb);
-    lv_display_set_buffers(lvgl_disp, lvgl_draw_buf, nullptr,
-                           buf_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
+
+    // Use two separate buffer pointers for proper double buffering
+    // CRITICAL: third arg is SIZE IN PIXELS, not bytes!
+    lv_color_t *buf1 = lvgl_draw_buf;
+    lv_color_t *buf2 = lvgl_draw_buf + buf_size_px;  // second half of allocation
+    lv_display_set_buffers(lvgl_disp, buf1, buf2,
+                           buf_size_px, LV_DISPLAY_RENDER_MODE_PARTIAL);
+
+    Serial.printf("[LVGL] Display registered with %d px buffer, mode=PARTIAL, depth=%d\n",
+                  buf_size_px, LV_COLOR_DEPTH);
 
     // Register touch input device
     lvgl_indev = lv_indev_create();
@@ -801,6 +847,12 @@ void setup() {
     Serial.println("ESP32 Dashboard Controller");
     Serial.println("Sunton ESP32-8048S070 (800x480)");
     Serial.println("========================================");
+    Serial.printf("Chip: %s Rev %d, Cores: %d, Freq: %d MHz\n",
+                  ESP.getChipModel(), ESP.getChipRevision(),
+                  ESP.getChipCores(), ESP.getCpuFreqMHz());
+    Serial.printf("Flash: %d MB, PSRAM: %d MB\n",
+                  ESP.getFlashChipSize() / 1048576,
+                  ESP.getPsramSize() / 1048576);
 
     // 1. Initialize display (and touch via LovyanGFX)
     init_display();
@@ -809,27 +861,49 @@ void setup() {
     init_lvgl();
 
     // 3. Build the UI
+    Serial.println("[UI] Building UI...");
     build_ui();
+    Serial.println("[UI] UI built OK");
 
-    // 4. Connect to WiFi
+    // 4. Connect to WiFi (non-blocking would be better, but keeping it simple)
+    // NOTE: If WiFi doesn't exist, this blocks for WIFI_TIMEOUT_MS (10s).
+    // The UI will display regardless of WiFi status.
+    Serial.println("[WIFI] Connecting (non-blocking eventually)...");
     wifi_connect();
 
-    // 5. Initial data fetch
-    api_poll_all();
+    // 5. Initial data fetch (skips gracefully if WiFi is down)
+    if (WiFi.status() == WL_CONNECTED) {
+        api_poll_all();
+    } else {
+        Serial.println("[API] Skipping initial poll (WiFi not connected)");
+    }
 
-    Serial.println("[SETUP] Complete!");
+    Serial.println("[SETUP] Complete! Entering main loop.");
 }
 
 void loop() {
-    // Run LVGL task handler
+    // Run LVGL task handler - THIS IS WHAT MAKES LVGL DRAW!
+    // Without this call, LVGL never renders anything to the display.
+    static unsigned long last_loop_print = 0;
+    unsigned long now = millis();
+
     lv_timer_handler();
+
+    // Print a heartbeat every 5 seconds to confirm loop() is running
+    if (now - last_loop_print > 5000) {
+        last_loop_print = now;
+        Serial.printf("[LOOP] Alive at %lu ms, free heap=%d, free PSRAM=%d\n",
+                      now, ESP.getFreeHeap(), ESP.getFreePsram());
+    }
+
+    // Small delay to prevent watchdog timeout on ESP32-S3
+    // This is standard practice (5ms is fine for 200Hz LVGL polling)
     delay(5);
 
     // Ensure WiFi stays connected
     wifi_ensure_connected();
 
     // Poll the API at the configured interval
-    unsigned long now = millis();
     if (now - last_poll_ms >= API_POLL_INTERVAL_MS) {
         last_poll_ms = now;
         api_poll_all();
