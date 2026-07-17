@@ -96,10 +96,11 @@
 #define WORKSPACE_ROWS       2
 
 // LVGL display buffer size (rows per buffer)
-// With 2 buffers of screenWidth * 40, total = 800 * 40 * 2 * 2 = 128KB
-// This avoids excessive PSRAM usage while keeping rendering smooth
-// Buffer rows for LVGL partial rendering
-// Higher = smoother but more RAM. 40 works without PSRAM, 80 is smoother
-#define LVGL_BUF_ROWS   40
+// NO-PSRAM OPTIMIZATION:
+// This board has NO PSRAM. We use a single buffer (not double) of
+// 800 x 160 x 2 = 256KB, allocated from DMA-capable SRAM (~384KB available).
+// Single buffer + 160 rows = only 3 flushes per frame instead of 12.
+// This is MUCH smoother than 40 rows with double buffer (192KB).
+#define LVGL_BUF_ROWS   160
 
 #endif // CONFIG_H

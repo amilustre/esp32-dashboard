@@ -349,7 +349,7 @@ static lv_obj_t* build_page_workspaces(lv_obj_t *parent) {
 
         // Label inside button
         ws_labels[i] = lv_label_create(btn);
-        lv_label_set_text_fmt(ws_labels[i], "WS %d\n---\n0 windows", i + 1);
+        lv_label_set_text_fmt(ws_labels[i], "WS %d\nLoading...", i + 1);
         lv_obj_set_style_text_color(ws_labels[i], lv_color_hex(0xe0e0e0), 0);
         lv_obj_center(ws_labels[i]);
 
@@ -465,7 +465,7 @@ static lv_obj_t* build_page_volume(lv_obj_t *parent) {
 
     // Volume percentage display
     label_volume = lv_label_create(page);
-    lv_label_set_text(label_volume, "75%");
+    lv_label_set_text(label_volume, "--%");
     lv_obj_set_style_text_font(label_volume, &lv_font_montserrat_32, 0);
     lv_obj_set_style_text_color(label_volume, lv_color_hex(0x00d2ff), 0);
     lv_obj_set_width(label_volume, DISPLAY_WIDTH);
@@ -657,30 +657,29 @@ static void init_lvgl() {
     // We keep it as a fallback in case LV_TICK_CUSTOM is ever disabled.
     lv_tick_set_cb(lvgl_tick_cb);
 
-    // Allocate draw buffer from PSRAM if available, otherwise from normal RAM
+    // Allocate a single draw buffer from DMA RAM (no PSRAM available)
     // LVGL 9.x lv_display_set_buffers() expects the size in PIXELS, not bytes!
     size_t buf_size_px = DISPLAY_WIDTH * LVGL_BUF_ROWS;        // pixels per buffer
     size_t buf_size_bytes = buf_size_px * sizeof(lv_color_t);   // actual bytes needed
 
-    Serial.printf("[LVGL] Buffer: %d x %d rows = %d pixels, %zu bytes per buffer\n",
+    Serial.printf("[LVGL] Buffer: %d x %d rows = %d pixels, %zu bytes (single buffer)\n",
                   DISPLAY_WIDTH, LVGL_BUF_ROWS, buf_size_px, buf_size_bytes);
-    Serial.printf("[LVGL] 2 buffers total: %zu bytes\n", buf_size_bytes * 2);
 
-    // Allocate two display buffers as one contiguous block for double buffering
-    // Try: PSRAM → DMA-capable → normal RAM
+    // Allocate ONE display buffer (single buffering to save RAM)
+    // Try: DMA-capable RAM (preferred for display) → normal RAM
     const char *alloc_source = "none";
 
-    lvgl_draw_buf = (lv_color_t *)ps_malloc(buf_size_bytes * 2);
+    lvgl_draw_buf = (lv_color_t *)ps_malloc(buf_size_bytes * 1);
     if (lvgl_draw_buf) {
         alloc_source = "PSRAM (ps_malloc)";
     } else {
         Serial.println("[LVGL] WARNING: PSRAM (ps_malloc) failed, trying DMA-capable RAM");
-        lvgl_draw_buf = (lv_color_t *)heap_caps_malloc(buf_size_bytes * 2, MALLOC_CAP_DMA);
+        lvgl_draw_buf = (lv_color_t *)heap_caps_malloc(buf_size_bytes * 1, MALLOC_CAP_DMA);
         if (lvgl_draw_buf) {
             alloc_source = "DMA RAM (heap_caps_malloc)";
         } else {
             Serial.println("[LVGL] WARNING: DMA RAM failed, trying normal malloc");
-            lvgl_draw_buf = (lv_color_t *)malloc(buf_size_bytes * 2);
+            lvgl_draw_buf = (lv_color_t *)malloc(buf_size_bytes * 1);
             if (lvgl_draw_buf) {
                 alloc_source = "normal RAM (malloc)";
             }
@@ -692,15 +691,15 @@ static void init_lvgl() {
         while (1) { delay(100); }
     }
     Serial.printf("[LVGL] Draw buffer allocated via %s at 0x%08x (%zu bytes total)\n",
-                  alloc_source, (uintptr_t)lvgl_draw_buf, buf_size_bytes * 2);
+                  alloc_source, (uintptr_t)lvgl_draw_buf, buf_size_bytes * 1);
 
     lvgl_disp = lv_display_create(DISPLAY_WIDTH, DISPLAY_HEIGHT);
     lv_display_set_flush_cb(lvgl_disp, lvgl_flush_cb);
 
-    // Use two separate buffer pointers for proper double buffering
+    // Use a single buffer (no PSRAM available — saves 96KB vs double buffer)
     // CRITICAL: third arg is SIZE IN PIXELS, not bytes!
     lv_color_t *buf1 = lvgl_draw_buf;
-    lv_color_t *buf2 = lvgl_draw_buf + buf_size_px;  // second half of allocation
+    lv_color_t *buf2 = NULL;  // single buffer mode
     lv_display_set_buffers(lvgl_disp, buf1, buf2,
                            buf_size_px, LV_DISPLAY_RENDER_MODE_PARTIAL);
 
