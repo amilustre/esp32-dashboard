@@ -98,6 +98,8 @@
 // LVGL display buffer size (rows per buffer)
 // With 2 buffers of screenWidth * 40, total = 800 * 40 * 2 * 2 = 128KB
 // This avoids excessive PSRAM usage while keeping rendering smooth
-#define LVGL_BUF_ROWS   40
+// Buffer rows for LVGL partial rendering
+// Higher = smoother but more RAM. 40 works without PSRAM, 80 is smoother
+#define LVGL_BUF_ROWS   80
 
 #endif // CONFIG_H
