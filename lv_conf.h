@@ -7,7 +7,9 @@
 #ifndef LV_CONF_H
 #define LV_CONF_H
 
+#ifndef __ASSEMBLY__
 #include <stdint.h>
+#endif
 
 /* Color depth: 16-bit RGB565 for 800x480 display */
 #define LV_COLOR_DEPTH 16
@@ -60,7 +62,7 @@
 #define LV_LOG_LEVEL LV_LOG_LEVEL_WARN
 
 /* Memory pool size */
-#define LV_MEM_SIZE (32 * 1024 * 1024) /* 32KB */
+#define LV_MEM_SIZE (32 * 1024) /* 32KB */
 
 /* GPU - none, use CPU rendering */
 #define LV_USE_GPU_ARM_MALI 0
