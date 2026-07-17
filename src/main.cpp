@@ -84,9 +84,6 @@ static void init_display() {
     Serial.println("[DISPLAY] Initializing with LovyanGFX...");
 
     lcd.init();
-    if (!lcd.isPCLKEnabled()) {
-        Serial.println("[DISPLAY] WARNING: PCLK may not be running");
-    }
     lcd.setBrightness(200);  // ~78% brightness
     lcd.fillScreen(TFT_BLACK);
 
@@ -302,7 +299,8 @@ static lv_obj_t* build_page_workspaces(lv_obj_t *parent) {
 
         // Tap handler to switch workspace
         lv_obj_add_event_cb(btn, [](lv_event_t *e) {
-            int ws_id = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target(e));
+            void *user_data = lv_obj_get_user_data(lv_event_get_target(e));
+            int ws_id = (int)(intptr_t)user_data;
             switch_workspace(ws_id);
         }, LV_EVENT_CLICKED, nullptr);
     }
