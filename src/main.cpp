@@ -110,7 +110,7 @@ static void init_display() {
     pinMode(TFT_BL, OUTPUT);
     digitalWrite(TFT_BL, HIGH);
 
-    gfx->fillScreen(BLACK);
+    gfx->fillScreen(0x0000);
 
     Serial.println("[DISPLAY] Display initialized OK (Arduino_GFX, no PSRAM needed)");
 }
