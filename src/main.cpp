@@ -666,23 +666,18 @@ static void init_lvgl() {
                   DISPLAY_WIDTH, LVGL_BUF_ROWS, buf_size_px, buf_size_bytes);
 
     // Allocate ONE display buffer (single buffering to save RAM)
-    // Try: DMA-capable RAM (preferred for display) → normal RAM
+    // Try: DMA-capable SRAM (~384KB available) → normal malloc (DRAM, limited ~52KB)
+    // Note: 800 x 160 x 2 = 256KB fits easily in DMA RAM
     const char *alloc_source = "none";
 
-    lvgl_draw_buf = (lv_color_t *)ps_malloc(buf_size_bytes * 1);
+    lvgl_draw_buf = (lv_color_t *)heap_caps_malloc(buf_size_bytes * 1, MALLOC_CAP_DMA);
     if (lvgl_draw_buf) {
-        alloc_source = "PSRAM (ps_malloc)";
+        alloc_source = "DMA RAM (heap_caps_malloc)";
     } else {
-        Serial.println("[LVGL] WARNING: PSRAM (ps_malloc) failed, trying DMA-capable RAM");
-        lvgl_draw_buf = (lv_color_t *)heap_caps_malloc(buf_size_bytes * 1, MALLOC_CAP_DMA);
+        Serial.println("[LVGL] WARNING: DMA RAM failed, trying normal malloc");
+        lvgl_draw_buf = (lv_color_t *)malloc(buf_size_bytes * 1);
         if (lvgl_draw_buf) {
-            alloc_source = "DMA RAM (heap_caps_malloc)";
-        } else {
-            Serial.println("[LVGL] WARNING: DMA RAM failed, trying normal malloc");
-            lvgl_draw_buf = (lv_color_t *)malloc(buf_size_bytes * 1);
-            if (lvgl_draw_buf) {
-                alloc_source = "normal RAM (malloc)";
-            }
+            alloc_source = "normal RAM (malloc)";
         }
     }
 
