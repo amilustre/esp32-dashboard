@@ -885,31 +885,46 @@ static void volume_toggle_mute() {
 void setup() {
     Serial.begin(115200);
     delay(500);
-    Serial.println("\n========================================");
+    Serial.println("\\n========================================");
     Serial.println("ESP32 Dashboard Controller");
     Serial.println("Sunton ESP32-8048S070 (800x480)");
     Serial.println("========================================");
-    Serial.printf("Chip: %s Rev %d, Cores: %d, Freq: %d MHz\n",
-                  ESP.getChipModel(), ESP.getChipRevision(),
-                  ESP.getChipCores(), ESP.getCpuFreqMHz());
-    Serial.printf("Flash: %d MB\n",
-                  ESP.getFlashChipSize() / 1048576);
 
-    // Explicitly init PSRAM and report status
-    // On ESP32-S3, PSRAM is usually initialized by bootloader if board config enables it,
-    // but calling psramInit() here ensures it gets a kick if the board config is marginal.
+    // ====================================================
+    // PSRAM INIT — MUST happen before display / LVGL init
+    // On ESP32-S3 with octal PSRAM (Sunton 8048S070), the
+    // bootloader may not auto-init PSRAM.  psramInit() must
+    // be called explicitly, and early, to ensure the display
+    // buffer allocator (ps_malloc) has PSRAM available.
+    // ====================================================
 #if defined(BOARD_HAS_PSRAM)
-    psramInit();
+    {
+        Serial.println("[PSRAM] Calling psramInit()...");
+        bool psram_ok = psramInit();
+        Serial.printf("[PSRAM] psramInit() returned: %s\\n",
+                      psram_ok ? "SUCCESS" : "FAILED");
+    }
+#else
+    Serial.println("[PSRAM] BOARD_HAS_PSRAM not defined — skipping psramInit()");
 #endif
 
     if (psramFound()) {
-        Serial.printf("PSRAM: %d MB total, %d MB free\n",
+        Serial.printf("[PSRAM] FOUND: %u bytes total, %u bytes free\\n",
+                      ESP.getPsramSize(), ESP.getFreePsram());
+        Serial.printf("[PSRAM] = %u MB total, %u MB free\\n",
                       ESP.getPsramSize() / 1048576,
                       ESP.getFreePsram() / 1048576);
     } else {
-        Serial.println("PSRAM: NOT FOUND! Display performance will be severely degraded.");
-        Serial.println("PSRAM: Check platformio.ini board_build.psram setting.");
+        Serial.println("[PSRAM] NOT FOUND! Display performance will be severely degraded.");
+        Serial.println("[PSRAM] Check platformio.ini: board_build.psram=enable, psram_mode=opi");
+        Serial.println("[PSRAM] Reason: Sunton ESP32-8048S070 uses octal PSRAM, not quad SPI.");
     }
+
+    Serial.printf("[CHIP] Model: %s Rev %d, Cores: %d, Freq: %d MHz\\n",
+                  ESP.getChipModel(), ESP.getChipRevision(),
+                  ESP.getChipCores(), ESP.getCpuFreqMHz());
+    Serial.printf("[CHIP] Flash: %u MB\\n",
+                  ESP.getFlashChipSize() / 1048576);
 
     // 1. Initialize display (and touch via LovyanGFX)
     init_display();
