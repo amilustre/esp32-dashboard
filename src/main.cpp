@@ -88,15 +88,8 @@ static void init_display() {
     lcd.setBrightness(200);  // ~78% brightness
     lcd.fillScreen(TFT_BLACK);
 
-    Serial.println("[DISPLAY] Display initialized OK (white flash seen = hardware works)");
-
-    // Check PSRAM availability
-    if (psramFound()) {
-        Serial.printf("[DISPLAY] PSRAM found: %d bytes total, %d bytes free\n",
-                      ESP.getPsramSize(), ESP.getFreePsram());
-    } else {
-        Serial.println("[DISPLAY] WARNING: No PSRAM found! Performance will suffer.");
-    }
+    Serial.println("[DISPLAY] Display initialized OK");
+    Serial.println("[DISPLAY] No PSRAM — using LVGL partial rendering with DMA SRAM buffer");
 }
 
 // No separate init_touch() needed - LovyanGFX handles GT911 internally
@@ -879,46 +872,22 @@ static void volume_toggle_mute() {
 void setup() {
     Serial.begin(115200);
     delay(500);
-    Serial.println("\\n========================================");
+    Serial.println("\n========================================");
     Serial.println("ESP32 Dashboard Controller");
     Serial.println("Sunton ESP32-8048S070 (800x480)");
     Serial.println("========================================");
 
-    // ====================================================
-    // PSRAM INIT — MUST happen before display / LVGL init
-    // On ESP32-S3 with octal PSRAM (Sunton 8048S070), the
-    // bootloader may not auto-init PSRAM.  psramInit() must
-    // be called explicitly, and early, to ensure the display
-    // buffer allocator (ps_malloc) has PSRAM available.
-    // ====================================================
-#if defined(BOARD_HAS_PSRAM)
-    {
-        Serial.println("[PSRAM] Calling psramInit()...");
-        bool psram_ok = psramInit();
-        Serial.printf("[PSRAM] psramInit() returned: %s\\n",
-                      psram_ok ? "SUCCESS" : "FAILED");
-    }
-#else
-    Serial.println("[PSRAM] BOARD_HAS_PSRAM not defined — skipping psramInit()");
-#endif
+    Serial.println("[PSRAM] DISABLED — no PSRAM on this board.");
+    Serial.println("[PSRAM] Using DMA SRAM for LVGL draw buffer and internal allocations.");
 
-    if (psramFound()) {
-        Serial.printf("[PSRAM] FOUND: %u bytes total, %u bytes free\\n",
-                      ESP.getPsramSize(), ESP.getFreePsram());
-        Serial.printf("[PSRAM] = %u MB total, %u MB free\\n",
-                      ESP.getPsramSize() / 1048576,
-                      ESP.getFreePsram() / 1048576);
-    } else {
-        Serial.println("[PSRAM] NOT FOUND! Display performance will be severely degraded.");
-        Serial.println("[PSRAM] Check platformio.ini: board_build.psram=enable, psram_mode=opi");
-        Serial.println("[PSRAM] Reason: Sunton ESP32-8048S070 uses octal PSRAM, not quad SPI.");
-    }
-
-    Serial.printf("[CHIP] Model: %s Rev %d, Cores: %d, Freq: %d MHz\\n",
+    Serial.printf("[CHIP] Model: %s Rev %d, Cores: %d, Freq: %d MHz\n",
                   ESP.getChipModel(), ESP.getChipRevision(),
                   ESP.getChipCores(), ESP.getCpuFreqMHz());
-    Serial.printf("[CHIP] Flash: %u MB\\n",
+    Serial.printf("[CHIP] Flash: %u MB\n",
                   ESP.getFlashChipSize() / 1048576);
+    Serial.printf("[CHIP] Free heap (DRAM): %u bytes\n", ESP.getFreeHeap());
+    Serial.printf("[CHIP] Free DMA RAM: %u bytes\n",
+                  heap_caps_get_free_size(MALLOC_CAP_DMA));
 
     // 1. Initialize display (and touch via LovyanGFX)
     init_display();
@@ -934,7 +903,7 @@ void setup() {
     // 4. Connect to WiFi (non-blocking would be better, but keeping it simple)
     // NOTE: If WiFi doesn't exist, this blocks for WIFI_TIMEOUT_MS (10s).
     // The UI will display regardless of WiFi status.
-    Serial.println("[WIFI] Connecting (non-blocking eventually)...");
+    Serial.println("[WIFI] Connecting...");
     wifi_connect();
 
     // 5. Initial data fetch (skips gracefully if WiFi is down)

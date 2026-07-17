@@ -101,6 +101,6 @@
 // 800 x 160 x 2 = 256KB, allocated from DMA-capable SRAM (~384KB available).
 // Single buffer + 160 rows = only 3 flushes per frame instead of 12.
 // This is MUCH smoother than 40 rows with double buffer (192KB).
-#define LVGL_BUF_ROWS   160
+#define LVGL_BUF_ROWS   40
 
 #endif // CONFIG_H

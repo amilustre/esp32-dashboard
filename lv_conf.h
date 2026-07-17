@@ -14,11 +14,12 @@
 /* Color depth: 16-bit RGB565 for 800x480 display */
 #define LV_COLOR_DEPTH 16
 
-/* Use PSRAM for drawing buffers */
+/* NO PSRAM: Use malloc (internal DRAM) instead of ps_malloc.
+ * ps_malloc requires PSRAM which is NOT present on this board. */
 #define LV_MEM_CUSTOM 1
 #if LV_MEM_CUSTOM
     #define LV_MEM_CUSTOM_INCLUDE <stdlib.h>
-    #define LV_MEM_CUSTOM_ALLOC   ps_malloc
+    #define LV_MEM_CUSTOM_ALLOC   malloc
     #define LV_MEM_CUSTOM_FREE    free
     #define LV_MEM_CUSTOM_REALLOC realloc
 #endif

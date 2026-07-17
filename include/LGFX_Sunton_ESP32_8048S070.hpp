@@ -3,7 +3,7 @@
  *
  * LovyanGFX board configuration for Sunton ESP32-8048S070
  * 7" 800x480 RGB TFT + GT911 capacitive touch
- * ESP32-S3 with 8MB PSRAM
+ * ESP32-S3 with NO PSRAM
  *
  * Panel driver IC: EK9716 (RGB parallel)
  * Touch: GT911 (I2C)
@@ -11,9 +11,11 @@
  * Based on the official LovyanGFX board header from:
  * https://github.com/lovyan03/LovyanGFX/blob/master/src/lgfx_user/LGFX_Sunton_ESP32-8048S070.h
  *
- * Uses 14 MHz PCLK with corrected display timing from Sunton vendor demo.
- * Timing values: hsync_front_porch=210, hsync_pulse_width=30, hsync_back_porch=16,
- * vsync_front_porch=22, vsync_pulse_width=13, vsync_back_porch=10.
+ * NO-PSRAM configuration:
+ * - use_psram=0 (no PSRAM available on this board)
+ * - use_dma=1 (use DMA-capable SRAM for frame buffer)
+ * - Display timing matches official LovyanGFX values (from EK9716 datasheet)
+ * - Touch I2C on NUM_1 with address 0x14 (standard GT911)
  */
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
@@ -47,10 +49,12 @@ public:
       _panel_instance.config(cfg);
     }
 
-    // Use PSRAM for frame buffer
+    // NO PSRAM available on this board — use DMA SRAM for frame buffer
+    // Frame buffer size: 800×480×2 = 768KB (won't fit in 384KB DMA SRAM)
+    // Fallback: LVGL partial rendering with lvgl_flush_cb writes strips directly.
     {
       auto cfg = _panel_instance.config_detail();
-      cfg.use_psram = 1;
+      cfg.use_psram = 0;   // no PSRAM — skip PSRAM allocation
       _panel_instance.config_detail(cfg);
     }
 
@@ -91,19 +95,19 @@ public:
       cfg.pin_hsync   = GPIO_NUM_39;   // HSYNC
       cfg.pin_pclk    = GPIO_NUM_42;   // PCLK
 
-      cfg.freq_write = 16000000;
+      cfg.freq_write = 14000000;
 
-      // Display timing from ConnalM/Arduino_GFX vendor demo (confirmed working)
+      // Display timing from official LovyanGFX board header
+      // https://github.com/lovyan03/LovyanGFX/blob/master/src/lgfx_user/LGFX_Sunton_ESP32-8048S070.h
       cfg.hsync_polarity       = 0;
-      cfg.hsync_front_porch    = 210;
-      cfg.hsync_pulse_width    = 30;
+      cfg.hsync_front_porch    = 80;
+      cfg.hsync_pulse_width    = 4;
       cfg.hsync_back_porch     = 16;
       cfg.vsync_polarity       = 0;
       cfg.vsync_front_porch    = 22;
-      cfg.vsync_pulse_width    = 13;
-      cfg.vsync_back_porch     = 10;
-      cfg.pclk_active_neg       = 1;
-      cfg.pclk_idle_high       = 0;
+      cfg.vsync_pulse_width    = 4;
+      cfg.vsync_back_porch     = 4;
+      cfg.pclk_idle_high       = 1;
 
       _bus_instance.config(cfg);
     }
@@ -142,8 +146,8 @@ public:
       cfg.pin_rst    = GPIO_NUM_38;
       cfg.pin_sda    = GPIO_NUM_19;
       cfg.pin_scl    = GPIO_NUM_20;
-      cfg.i2c_addr   = 0x5D;           // GT911 address (0x14 shifted = 0x5D)
-      cfg.i2c_port   = I2C_NUM_0;
+      cfg.i2c_addr   = 0x14;           // GT911 standard 7-bit address
+      cfg.i2c_port   = I2C_NUM_1;
       cfg.freq       = 400000;
       cfg.offset_rotation = 0;
       cfg.bus_shared = false;
