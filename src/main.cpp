@@ -106,23 +106,53 @@ static void init_display() {
 // WiFi Management
 // ============================================================================
 
+/**
+ * Return a human-readable name for the WiFi status code.
+ */
+static const char* wifi_status_name(wl_status_t status) {
+    switch (status) {
+        case WL_IDLE_STATUS:      return "WL_IDLE_STATUS";
+        case WL_NO_SSID_AVAIL:    return "WL_NO_SSID_AVAIL";
+        case WL_SCAN_COMPLETED:   return "WL_SCAN_COMPLETED";
+        case WL_CONNECTED:        return "WL_CONNECTED";
+        case WL_CONNECT_FAILED:   return "WL_CONNECT_FAILED";
+        case WL_CONNECTION_LOST:  return "WL_CONNECTION_LOST";
+        case WL_DISCONNECTED:     return "WL_DISCONNECTED";
+        default:                  return "UNKNOWN";
+    }
+}
+
 static bool wifi_connect() {
-    Serial.printf("[WIFI] Connecting to %s...\n", WIFI_SSID);
+    Serial.printf("[WIFI] Connecting to SSID: \"%s\" ...\n", WIFI_SSID);
 
     WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
     unsigned long start = millis();
+    unsigned long last_dot = start;
     while (WiFi.status() != WL_CONNECTED) {
-        if (millis() - start > WIFI_TIMEOUT_MS) {
-            Serial.println("[WIFI] Connection timeout!");
+        unsigned long now = millis();
+        if (now - start > WIFI_TIMEOUT_MS) {
+            wl_status_t status = WiFi.status();
+            Serial.printf("\n[WIFI] Connection timeout after %d ms! Status: %d (%s)\n",
+                          WIFI_TIMEOUT_MS, status, wifi_status_name(status));
+            Serial.printf("[WIFI] SSID used: \"%s\". Check that the network is reachable.\n",
+                          WIFI_SSID);
             return false;
         }
+        // Print a dot every 500ms
+        if (now - last_dot > 500) {
+            last_dot = now;
+            wl_status_t s = WiFi.status();
+            Serial.printf("[%d|%s] ", s, wifi_status_name(s));
+        }
         delay(200);
-        Serial.print(".");
     }
 
-    Serial.printf("\n[WIFI] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("\n[WIFI] Connected!\n");
+    Serial.printf("[WIFI]   SSID: %s\n", WiFi.SSID().c_str());
+    Serial.printf("[WIFI]   IP:   %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("[WIFI]   RSSI: %d dBm\n", WiFi.RSSI());
     return true;
 }
 
@@ -637,20 +667,32 @@ static void init_lvgl() {
     Serial.printf("[LVGL] 2 buffers total: %zu bytes\n", buf_size_bytes * 2);
 
     // Allocate two display buffers as one contiguous block for double buffering
+    // Try: PSRAM → DMA-capable → normal RAM
+    const char *alloc_source = "none";
+
     lvgl_draw_buf = (lv_color_t *)ps_malloc(buf_size_bytes * 2);
-    if (!lvgl_draw_buf) {
-        Serial.println("[LVGL] WARNING: PSRAM allocation failed, trying normal RAM");
+    if (lvgl_draw_buf) {
+        alloc_source = "PSRAM (ps_malloc)";
+    } else {
+        Serial.println("[LVGL] WARNING: PSRAM (ps_malloc) failed, trying DMA-capable RAM");
         lvgl_draw_buf = (lv_color_t *)heap_caps_malloc(buf_size_bytes * 2, MALLOC_CAP_DMA);
-        if (!lvgl_draw_buf) {
+        if (lvgl_draw_buf) {
+            alloc_source = "DMA RAM (heap_caps_malloc)";
+        } else {
+            Serial.println("[LVGL] WARNING: DMA RAM failed, trying normal malloc");
             lvgl_draw_buf = (lv_color_t *)malloc(buf_size_bytes * 2);
+            if (lvgl_draw_buf) {
+                alloc_source = "normal RAM (malloc)";
+            }
         }
     }
 
     if (!lvgl_draw_buf) {
-        Serial.println("[LVGL] FATAL: Cannot allocate draw buffer! HALTING.");
+        Serial.println("[LVGL] FATAL: Cannot allocate draw buffer from ANY source! HALTING.");
         while (1) { delay(100); }
     }
-    Serial.printf("[LVGL] Draw buffer allocated at 0x%08x\n", (uintptr_t)lvgl_draw_buf);
+    Serial.printf("[LVGL] Draw buffer allocated via %s at 0x%08x (%zu bytes total)\n",
+                  alloc_source, (uintptr_t)lvgl_draw_buf, buf_size_bytes * 2);
 
     lvgl_disp = lv_display_create(DISPLAY_WIDTH, DISPLAY_HEIGHT);
     lv_display_set_flush_cb(lvgl_disp, lvgl_flush_cb);
@@ -850,9 +892,24 @@ void setup() {
     Serial.printf("Chip: %s Rev %d, Cores: %d, Freq: %d MHz\n",
                   ESP.getChipModel(), ESP.getChipRevision(),
                   ESP.getChipCores(), ESP.getCpuFreqMHz());
-    Serial.printf("Flash: %d MB, PSRAM: %d MB\n",
-                  ESP.getFlashChipSize() / 1048576,
-                  ESP.getPsramSize() / 1048576);
+    Serial.printf("Flash: %d MB\n",
+                  ESP.getFlashChipSize() / 1048576);
+
+    // Explicitly init PSRAM and report status
+    // On ESP32-S3, PSRAM is usually initialized by bootloader if board config enables it,
+    // but calling psramInit() here ensures it gets a kick if the board config is marginal.
+#if defined(BOARD_HAS_PSRAM)
+    psramInit();
+#endif
+
+    if (psramFound()) {
+        Serial.printf("PSRAM: %d MB total, %d MB free\n",
+                      ESP.getPsramSize() / 1048576,
+                      ESP.getFreePsram() / 1048576);
+    } else {
+        Serial.println("PSRAM: NOT FOUND! Display performance will be severely degraded.");
+        Serial.println("PSRAM: Check platformio.ini board_build.psram setting.");
+    }
 
     // 1. Initialize display (and touch via LovyanGFX)
     init_display();
